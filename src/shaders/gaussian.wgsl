@@ -1,18 +1,32 @@
+// This shader draws a set of splats, each defined by a center and an extent
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
-    //TODO: information passed from vertex shader to fragment shader
 };
 
 struct Splat {
-    //TODO: information defined in preprocess compute shader
+    center: vec2<f32>,
+    extent: vec2<f32>,
 };
+
+@group(0) @binding(0)
+var<storage, read> splats: array<Splat>;
 
 @vertex
 fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
-    //TODO: reconstruct 2D quad based on information from splat, pass 
     var out: VertexOutput;
-    out.position = vec4<f32>(1. ,1. , 0., 1.);
+    let corners = array<vec2<f32>,4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+    );
+    let splat = splats[instance_index];
+    let ndc = splat.center + splat.extent * corners[vertex_index % 4u];
+    out.position = vec4<f32>(ndc, 0.0, 1.0);
     return out;
 }
 

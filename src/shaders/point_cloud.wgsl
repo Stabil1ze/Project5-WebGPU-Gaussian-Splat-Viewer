@@ -1,3 +1,5 @@
+// This shader is used to render a point cloud using the camera's view and projection matrices
+
 struct CameraUniforms {
     view: mat4x4<f32>,
     view_inv: mat4x4<f32>,

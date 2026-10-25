@@ -67,6 +67,9 @@ struct Gaussian {
 
 struct Splat {
     center: vec2<f32>,
+    conic: vec3<f32>,
+    color: vec4<f32>,
+    radius: f32,
     extent: vec2<f32>,
 };
 
@@ -152,16 +155,116 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
         return;
     }
 
+    // Stored quaternion order is (w, x, y, z)
+    let rot01 = unpack2x16float(gaussian.rot[0]);
+    let rot23 = unpack2x16float(gaussian.rot[1]);
+    var q = vec4<f32>(rot01.x, rot01.y, rot23.x, rot23.y);
+    let q_length = length(q);
+    if (q_length < 1e-8) {
+        return;
+    }
+    q /= q_length;
+
+    let scale01 = unpack2x16float(gaussian.scale[0]);
+    let scale23 = unpack2x16float(gaussian.scale[1]);
+    let scale_modifier = max(render_settings.gaussian_scaling, 0.0);
+    let scale = vec3<f32>(
+        exp(scale01.x),
+        exp(scale01.y),
+        exp(scale23.x),
+    ) * scale_modifier;
+
+    // Convert quaternion to rotation matrix
+    let x = q.y;
+    let y = q.z;
+    let z = q.w;
+    let w = q.x;
+    let rotation = mat3x3<f32>(
+        vec3<f32>(
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + w * z),
+            2.0 * (x * z - w * y),
+        ),
+        vec3<f32>(
+            2.0 * (x * y - w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + w * x),
+        ),
+        vec3<f32>(
+            2.0 * (x * z + w * y),
+            2.0 * (y * z - w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ),
+    );
+    let scale_squared = mat3x3<f32>(
+        vec3<f32>(scale.x * scale.x, 0.0, 0.0),
+        vec3<f32>(0.0, scale.y * scale.y, 0.0),
+        vec3<f32>(0.0, 0.0, scale.z * scale.z),
+    );
+
+    // Covariance uses the 3DGS reparameterization R * S^2 * R^T
+    let covariance_3d = rotation * scale_squared * transpose(rotation);
+
+    let view_linear = mat3x3<f32>(
+        camera.view[0].xyz,
+        camera.view[1].xyz,
+        camera.view[2].xyz,
+    );
+    let covariance_view = view_linear * covariance_3d * transpose(view_linear);
+    let view_position = (camera.view * position).xyz;
+    let inv_z = 1.0 / view_position.z;
+    let jacobian_x = vec3<f32>(
+        camera.focal.x * inv_z,
+        0.0,
+        -camera.focal.x * view_position.x * inv_z * inv_z,
+    );
+    let jacobian_y = vec3<f32>(
+        0.0,
+        camera.focal.y * inv_z,
+        -camera.focal.y * view_position.y * inv_z * inv_z,
+    );
+
+    // The 0.3 low-pass term keeps the 2D covariance positive definite
+    let cov_a = dot(jacobian_x, covariance_view * jacobian_x) + 0.3;
+    let cov_b = dot(jacobian_x, covariance_view * jacobian_y);
+    let cov_c = dot(jacobian_y, covariance_view * jacobian_y) + 0.3;
+    let determinant = cov_a * cov_c - cov_b * cov_b;
+    if (determinant <= 1e-8) {
+        return;
+    }
+
+    let determinant_inv = 1.0 / determinant;
+    let conic = vec3<f32>(
+        cov_c * determinant_inv,
+        -cov_b * determinant_inv,
+        cov_a * determinant_inv,
+    );
+
+    let mid = 0.5 * (cov_a + cov_c);
+    let eigen_delta = sqrt(max(0.25 * (cov_a - cov_c) * (cov_a - cov_c) + cov_b * cov_b, 0.0));
+    let lambda_max = mid + eigen_delta;
+
+    // Cover three standard deviations of the projected 2D Gaussian
+    let radius = min(
+        max(ceil(3.0 * sqrt(max(lambda_max, 0.0))), 1.0),
+        max(camera.viewport.x, camera.viewport.y),
+    );
+    let half_extent = radius * 2.0 / camera.viewport;
+    let opacity = 1.0 / (1.0 + exp(-b.y));
+
     let visible_index = atomicAdd(&sort_infos.keys_size, 1u);
     atomicAdd(&draw_indirect.instance_count, 1u);
 
-    let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
+    let keys_per_dispatch = workgroupSize * sortKeyPerThread;
     if (visible_index % keys_per_dispatch == 0u) {
         atomicAdd(&sort_dispatch.dispatch_x, 1u);
     }
 
-    let half_extent = vec2<f32>(0.01) * max(render_settings.gaussian_scaling, 0.0);
+    // Construct the splat and store it in the output buffer
     splats[visible_index].center = ndc;
+    splats[visible_index].conic = conic;
+    splats[visible_index].color = vec4<f32>(1.0, 1.0, 1.0, opacity);
+    splats[visible_index].radius = radius;
     splats[visible_index].extent = half_extent;
 
     sort_depths[visible_index] = bitcast<u32>(clip.w);

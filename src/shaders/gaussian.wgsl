@@ -6,6 +6,9 @@ struct VertexOutput {
 
 struct Splat {
     center: vec2<f32>,
+    conic: vec3<f32>,
+    color: vec4<f32>,
+    radius: f32,
     extent: vec2<f32>,
 };
 

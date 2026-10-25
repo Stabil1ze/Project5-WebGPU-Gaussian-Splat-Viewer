@@ -4,6 +4,9 @@ import renderWGSL from '../shaders/gaussian.wgsl';
 import { get_sorter,c_histogram_block_rows,C } from '../sort/sort';
 import { Renderer } from './renderer';
 
+// Must match the storage layout of Splat in preprocess.wgsl and gaussian.wgsl
+const c_size_splat = 64;
+
 export interface GaussianRenderer extends Renderer {
   set_gaussian_scaling: (value: number) => void;
 }
@@ -40,7 +43,7 @@ export default function get_renderer(
   const splat_buffer = createBuffer(
     device,
     'splat buffer',
-    pc.num_points * 16,
+    pc.num_points * c_size_splat,
     GPUBufferUsage.STORAGE,
   );
   const render_settings_buffer = device.createBuffer({

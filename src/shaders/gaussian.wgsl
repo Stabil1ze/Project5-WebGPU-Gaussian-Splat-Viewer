@@ -2,6 +2,7 @@
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
 };
 
 struct Splat {
@@ -14,6 +15,8 @@ struct Splat {
 
 @group(0) @binding(0)
 var<storage, read> splats: array<Splat>;
+@group(0) @binding(1)
+var<storage, read> sorted_indices: array<u32>;
 
 @vertex
 fn vs_main(
@@ -27,13 +30,14 @@ fn vs_main(
         vec2<f32>(-1.0,  1.0),
         vec2<f32>( 1.0,  1.0),
     );
-    let splat = splats[instance_index];
+    let splat = splats[sorted_indices[instance_index]];
     let ndc = splat.center + splat.extent * corners[vertex_index % 4u];
     out.position = vec4<f32>(ndc, 0.0, 1.0);
+    out.color = splat.color;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(1.);
+    return vec4<f32>(in.color.rgb, 1.0);
 }

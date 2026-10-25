@@ -97,6 +97,7 @@ export default function get_renderer(
       { binding: 1, resource: { buffer: splat_buffer } },
       { binding: 2, resource: { buffer: render_settings_buffer } },
       { binding: 3, resource: { buffer: draw_indirect_buffer } },
+      { binding: 4, resource: { buffer: pc.sh_buffer } },
     ],
   });
 
@@ -138,6 +139,7 @@ export default function get_renderer(
     layout: render_pipeline.getBindGroupLayout(0),
     entries: [
       { binding: 0, resource: { buffer: splat_buffer } },
+      { binding: 1, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } },
     ],
   });
 
@@ -180,6 +182,7 @@ export default function get_renderer(
       device.queue.writeBuffer(sorter.sort_dispatch_indirect_buffer, 0, nulling_data);
       device.queue.writeBuffer(draw_indirect_buffer, 0, reset_draw_indirect_data);
       preprocess(encoder);
+      sorter.sort(encoder);
       render(encoder, texture_view);
     },
     camera_buffer,

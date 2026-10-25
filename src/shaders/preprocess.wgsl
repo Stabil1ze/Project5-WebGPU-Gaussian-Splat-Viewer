@@ -84,6 +84,8 @@ var<storage, read_write> splats: array<Splat>;
 var<uniform> render_settings: RenderSettings;
 @group(1) @binding(3)
 var<storage, read_write> draw_indirect: DrawIndirect;
+@group(1) @binding(4)
+var<storage, read> sh_coeffs: array<u32>;
 
 @group(2) @binding(0)
 var<storage, read_write> sort_infos: SortInfos;
@@ -96,8 +98,21 @@ var<storage, read_write> sort_dispatch: DispatchIndirect;
 
 /// reads the ith sh coef from the storage buffer 
 fn sh_coef(splat_idx: u32, c_idx: u32) -> vec3<f32> {
-    //TODO: access your binded sh_coeff, see load.ts for how it is stored
-    return vec3<f32>(0.0);
+    let coeff_base = splat_idx * 24u;
+
+    let half_index_x = c_idx * 3u;
+    let pair_x = unpack2x16float(sh_coeffs[coeff_base + half_index_x / 2u]);
+    let value_x = select(pair_x.x, pair_x.y, (half_index_x & 1u) == 1u);
+
+    let half_index_y = c_idx * 3u + 1u;
+    let pair_y = unpack2x16float(sh_coeffs[coeff_base + half_index_y / 2u]);
+    let value_y = select(pair_y.x, pair_y.y, (half_index_y & 1u) == 1u);
+
+    let half_index_z = c_idx * 3u + 2u;
+    let pair_z = unpack2x16float(sh_coeffs[coeff_base + half_index_z / 2u]);
+    let value_z = select(pair_z.x, pair_z.y, (half_index_z & 1u) == 1u);
+
+    return vec3<f32>(value_x, value_y, value_z);
 }
 
 // spherical harmonics evaluation with Condon–Shortley phase
@@ -251,6 +266,10 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     );
     let half_extent = radius * 2.0 / camera.viewport;
     let opacity = 1.0 / (1.0 + exp(-b.y));
+    let camera_position = camera.view_inv[3].xyz;
+    let view_direction = normalize(position.xyz - camera_position);
+    let sh_deg = min(u32(render_settings.sh_deg + 0.5), 3u);
+    let color = clamp(computeColorFromSH(view_direction, idx, sh_deg), vec3<f32>(0.0), vec3<f32>(1.0));
 
     let visible_index = atomicAdd(&sort_infos.keys_size, 1u);
     atomicAdd(&draw_indirect.instance_count, 1u);
@@ -263,10 +282,11 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     // Construct the splat and store it in the output buffer
     splats[visible_index].center = ndc;
     splats[visible_index].conic = conic;
-    splats[visible_index].color = vec4<f32>(1.0, 1.0, 1.0, opacity);
+    splats[visible_index].color = vec4<f32>(color, opacity);
     splats[visible_index].radius = radius;
     splats[visible_index].extent = half_extent;
 
-    sort_depths[visible_index] = bitcast<u32>(clip.w);
-    sort_indices[visible_index] = idx;
+    // Radix sort is ascending, so invert the positive depth bits for far-to-near order.
+    sort_depths[visible_index] = 0xFFFFFFFFu - bitcast<u32>(clip.w);
+    sort_indices[visible_index] = visible_index;
 }

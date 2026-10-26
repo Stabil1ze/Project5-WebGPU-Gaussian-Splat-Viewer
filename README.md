@@ -2,12 +2,15 @@
 
 **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 5**
 
-- Author: TODO
+- Author: Jing Huang
 - Tested on: Google Chrome 155.0.8059.86, Windows build 26200
 - Hardware: NVIDIA GeForce RTX 3060 Laptop GPU, Intel Core i7-12700H, 32 GB RAM
 - Runtime: 1280 x 720 WebGPU canvas
 
 ![Bicycle scene](images/bicycle-render.png)
+
+[Live Demo](https://stabil1ze.github.io/Project5-WebGPU-Gaussian-Splat-Viewer/) |
+[32-second demo video](images/demo.mp4)
 
 ## Overview
 
@@ -143,8 +146,8 @@ version control. Their sizes and SHA-256 checksums are tracked in
 
 ## Live Demo and Video
 
-- Live GitHub Pages deployment: pending.
-- Demo video/GIF: pending.
+- [Live Demo](https://stabil1ze.github.io/Project5-WebGPU-Gaussian-Splat-Viewer/)
+- [32-second MP4 demo](images/demo.mp4)
 
 ## Credits
 

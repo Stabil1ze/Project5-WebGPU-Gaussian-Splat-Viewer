@@ -1,7 +1,7 @@
 import { PointCloud } from '../utils/load';
 import preprocessWGSL from '../shaders/preprocess.wgsl';
 import renderWGSL from '../shaders/gaussian.wgsl';
-import { get_sorter,c_histogram_block_rows,C } from '../sort/sort';
+import { get_sorter,C } from '../sort/sort';
 import { Renderer } from './renderer';
 
 // Must match the storage layout of Splat in preprocess.wgsl and gaussian.wgsl
@@ -9,6 +9,8 @@ const c_size_splat = 64;
 
 export interface GaussianRenderer extends Renderer {
   set_gaussian_scaling: (value: number) => void;
+  set_culling: (enabled: boolean) => void;
+  set_point_fraction: (fraction: number) => void;
 }
 
 // Utility to create GPU buffers
@@ -30,9 +32,19 @@ export default function get_renderer(
   presentation_format: GPUTextureFormat,
   camera_buffer: GPUBuffer,
   initial_gaussian_scaling = 1,
+  initial_culling = true,
+  initial_point_fraction = 1,
 ): GaussianRenderer {
 
   const sorter = get_sorter(pc.num_points, device);
+  const workgroup_parameter = new URLSearchParams(window.location.search).get('wg');
+  const requested_workgroup_size = workgroup_parameter === null ? Number.NaN : Number(workgroup_parameter);
+  const preprocess_workgroup_size = Number.isFinite(requested_workgroup_size)
+    ? Math.min(
+        Math.max(Math.round(requested_workgroup_size), 32),
+        Math.min(512, device.limits.maxComputeInvocationsPerWorkgroup),
+      )
+    : C.histogram_wg_size;
   
   // ===============================================
   //            Initialize GPU Buffers
@@ -54,8 +66,8 @@ export default function get_renderer(
   const render_settings_data = new Float32Array([
     Math.max(initial_gaussian_scaling, 0),
     pc.sh_deg,
-    0,
-    0,
+    initial_culling ? 1 : 0,
+    Math.min(Math.max(initial_point_fraction, 0), 1),
   ]);
   device.queue.writeBuffer(render_settings_buffer, 0, render_settings_data);
   const draw_indirect_buffer = device.createBuffer({
@@ -75,8 +87,8 @@ export default function get_renderer(
       module: device.createShaderModule({ code: preprocessWGSL }),
       entryPoint: 'preprocess',
       constants: {
-        workgroupSize: C.histogram_wg_size,
-        sortKeyPerThread: c_histogram_block_rows,
+        workgroupSize: preprocess_workgroup_size,
+        sortKeysPerDispatch: C.histogram_wg_size * C.rs_histogram_block_rows,
       },
     },
   });
@@ -167,7 +179,7 @@ export default function get_renderer(
     pass.setBindGroup(0, camera_bind_group);
     pass.setBindGroup(1, gaussian_bind_group);
     pass.setBindGroup(2, sort_bind_group);
-    pass.dispatchWorkgroups(Math.ceil(pc.num_points / C.histogram_wg_size));
+    pass.dispatchWorkgroups(Math.ceil(pc.num_points / preprocess_workgroup_size));
     pass.end();
   };
 
@@ -203,6 +215,14 @@ export default function get_renderer(
     camera_buffer,
     set_gaussian_scaling: (value: number) => {
       render_settings_data[0] = Math.max(value, 0);
+      device.queue.writeBuffer(render_settings_buffer, 0, render_settings_data);
+    },
+    set_culling: (enabled: boolean) => {
+      render_settings_data[2] = enabled ? 1 : 0;
+      device.queue.writeBuffer(render_settings_buffer, 0, render_settings_data);
+    },
+    set_point_fraction: (fraction: number) => {
+      render_settings_data[3] = Math.min(Math.max(fraction, 0), 1);
       device.queue.writeBuffer(render_settings_buffer, 0, render_settings_data);
     },
   };

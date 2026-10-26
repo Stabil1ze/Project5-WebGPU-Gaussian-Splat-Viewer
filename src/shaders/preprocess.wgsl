@@ -20,7 +20,7 @@ const SH_C3 = array<f32,7>(
 );
 
 override workgroupSize: u32;
-override sortKeyPerThread: u32;
+override sortKeysPerDispatch: u32;
 
 struct DispatchIndirect {
     dispatch_x: atomic<u32>,
@@ -30,8 +30,8 @@ struct DispatchIndirect {
 
 struct SortInfos {
     keys_size: atomic<u32>,  // instance_count in DrawIndirect
-    //data below is for info inside radix sort 
-    padded_size: u32, 
+    // data below is for info inside radix sort
+    padded_size: u32,
     passes: u32,
     even_pass: u32,
     odd_pass: u32,
@@ -49,7 +49,8 @@ struct CameraUniforms {
 struct RenderSettings {
     gaussian_scaling: f32,
     sh_deg: f32,
-    padding: vec2<f32>,
+    culling_enabled: f32,
+    point_fraction: f32,
 }
 
 struct DrawIndirect {
@@ -96,7 +97,7 @@ var<storage, read_write> sort_indices : array<u32>;
 @group(2) @binding(3)
 var<storage, read_write> sort_dispatch: DispatchIndirect;
 
-/// reads the ith sh coef from the storage buffer 
+// reads the ith sh coef from the storage buffer
 fn sh_coef(splat_idx: u32, c_idx: u32) -> vec3<f32> {
     let coeff_base = splat_idx * 24u;
 
@@ -148,10 +149,22 @@ fn computeColorFromSH(dir: vec3<f32>, v_idx: u32, sh_deg: u32) -> vec3<f32> {
     return  max(vec3<f32>(0.), result);
 }
 
+fn hash_u32(value: u32) -> u32 {
+    var h = value * 747796405u + 2891336453u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    return (h >> 22u) ^ h;
+}
+
 @compute @workgroup_size(workgroupSize,1,1)
 fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) wgs: vec3<u32>) {
     let idx = gid.x;
     if (idx >= arrayLength(&gaussians)) {
+        return;
+    }
+
+    // Randomly sample a fraction of the gaussians to reduce the number of splats
+    let sample_value = f32(hash_u32(idx)) / 4294967295.0;
+    if (sample_value > clamp(render_settings.point_fraction, 0.0, 1.0)) {
         return;
     }
 
@@ -166,7 +179,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     }
 
     let ndc = clip.xy / clip.w;
-    if (abs(ndc.x) > 1.2 || abs(ndc.y) > 1.2) {
+    if (render_settings.culling_enabled > 0.5 && (abs(ndc.x) > 1.2 || abs(ndc.y) > 1.2)) {
         return;
     }
 
@@ -274,8 +287,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let visible_index = atomicAdd(&sort_infos.keys_size, 1u);
     atomicAdd(&draw_indirect.instance_count, 1u);
 
-    let keys_per_dispatch = workgroupSize * sortKeyPerThread;
-    if (visible_index % keys_per_dispatch == 0u) {
+    if (visible_index % sortKeysPerDispatch == 0u) {
         atomicAdd(&sort_dispatch.dispatch_x, 1u);
     }
 
@@ -286,7 +298,6 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     splats[visible_index].radius = radius;
     splats[visible_index].extent = half_extent;
 
-    // Radix sort is ascending, so invert the positive depth bits for far-to-near order.
     sort_depths[visible_index] = 0xFFFFFFFFu - bitcast<u32>(clip.w);
     sort_indices[visible_index] = visible_index;
 }

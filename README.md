@@ -66,6 +66,10 @@ http://127.0.0.1:5173/?wg=128
 
 Supported values are clamped to the adapter limit and use 256 by default.
 
+The optional half-precision preprocessing path can be enabled with
+`?precision=f16`. It requires the WebGPU `shader-f16` feature and falls back to
+f32 preprocessing when the feature is unavailable. The default remains f32.
+
 ## Rendering Pipeline
 
 1. Parse the PLY attributes on the CPU and upload packed f16 Gaussian data and

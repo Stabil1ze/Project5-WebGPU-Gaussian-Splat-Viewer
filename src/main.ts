@@ -18,11 +18,14 @@ import { assert } from './utils/util';
     return;
   }
   
+  const requiredLimits: Record<string, number> = {
+    maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
+    maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    // Large scenes can allocate buffers above the WebGPU default 256 MiB limit
+    maxBufferSize: adapter.limits.maxBufferSize,
+  };
   const device = await adapter.requestDevice({
-    requiredLimits: { 
-      maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
-      maxStorageBufferBindingSize: adapter.limits. maxStorageBufferBindingSize
-     },
+    requiredLimits,
   });
 
   const canvas = document.querySelector<HTMLCanvasElement>('#webgpu-canvas');

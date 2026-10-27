@@ -86,6 +86,7 @@ export default async function init(
       const uploadedFile = file.value;
       if (uploadedFile) {
         const pc = await load(uploadedFile, device);
+        camera.set_scene_bounds(pc.bounds_min, pc.bounds_max);
         pointcloud_renderer = get_renderer_pointcloud(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer = get_renderer_gaussian(
           pc,

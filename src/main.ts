@@ -24,7 +24,12 @@ import { assert } from './utils/util';
     // Large scenes can allocate buffers above the WebGPU default 256 MiB limit
     maxBufferSize: adapter.limits.maxBufferSize,
   };
+  const requiredFeatures: GPUFeatureName[] = [];
+  if (adapter.features.has('shader-f16')) {
+    requiredFeatures.push('shader-f16');
+  }
   const device = await adapter.requestDevice({
+    requiredFeatures,
     requiredLimits,
   });
 

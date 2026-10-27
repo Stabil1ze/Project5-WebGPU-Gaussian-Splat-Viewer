@@ -1,5 +1,6 @@
 import { PointCloud } from '../utils/load';
 import preprocessWGSL from '../shaders/preprocess.wgsl';
+import preprocessF16WGSL from '../shaders/preprocess_f16.wgsl';
 import renderWGSL from '../shaders/gaussian.wgsl';
 import { get_sorter,C } from '../sort/sort';
 import { Renderer } from './renderer';
@@ -45,6 +46,11 @@ export default function get_renderer(
         Math.min(512, device.limits.maxComputeInvocationsPerWorkgroup),
       )
     : C.histogram_wg_size;
+  const requested_precision = new URLSearchParams(window.location.search).get('precision');
+  const use_f16_preprocess = requested_precision === 'f16' && device.features.has('shader-f16');
+  if (requested_precision === 'f16' && !use_f16_preprocess) {
+    console.warn('shader-f16 is unavailable; falling back to f32 preprocessing');
+  }
   
   // ===============================================
   //            Initialize GPU Buffers
@@ -84,7 +90,9 @@ export default function get_renderer(
     label: 'preprocess',
     layout: 'auto',
     compute: {
-      module: device.createShaderModule({ code: preprocessWGSL }),
+      module: device.createShaderModule({
+        code: use_f16_preprocess ? preprocessF16WGSL : preprocessWGSL,
+      }),
       entryPoint: 'preprocess',
       constants: {
         workgroupSize: preprocess_workgroup_size,

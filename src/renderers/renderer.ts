@@ -92,6 +92,7 @@ export default async function init(
           pc,
           device,
           presentation_format,
+          canvas,
           camera.uniform_buffer,
           params.gaussian_multiplier,
           params.culling,

@@ -32,6 +32,10 @@ import { assert } from './utils/util';
     requiredFeatures,
     requiredLimits,
   });
+  device.addEventListener('uncapturederror', (event) => {
+    const error_event = event as GPUUncapturedErrorEvent;
+    console.error(`WebGPU validation error: ${error_event.error.message}`);
+  });
 
   const canvas = document.querySelector<HTMLCanvasElement>('#webgpu-canvas');
   assert(canvas !== null);

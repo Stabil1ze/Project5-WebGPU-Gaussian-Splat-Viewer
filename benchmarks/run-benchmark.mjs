@@ -21,6 +21,7 @@ Options:
   --height <pixels>      Canvas height, default 720
   --wg <size>            Preprocess workgroup size, default 256
   --precision <mode>     f32 or f16 preprocessing, default f32
+  --sort <mode>          global or tile sorting, default global
   --output <file.json>   Output path
   --headed               Show the browser window
   --help                 Print this message`);
@@ -36,6 +37,7 @@ function parse_arguments(argv) {
     height: 720,
     wg: 256,
     precision: 'f32',
+    sort: 'global',
     headed: false,
   };
 
@@ -50,6 +52,7 @@ function parse_arguments(argv) {
     'height',
     'wg',
     'precision',
+    'sort',
     'output',
   ]);
 
@@ -95,6 +98,9 @@ function parse_arguments(argv) {
   options.wg = Math.min(Math.max(Math.round(options.wg), 32), 512);
   if (options.precision !== 'f32' && options.precision !== 'f16') {
     throw new Error('--precision must be f32 or f16');
+  }
+  if (options.sort !== 'global' && options.sort !== 'tile') {
+    throw new Error('--sort must be global or tile');
   }
 
   if (!options.ply || !options.cameras) {
@@ -338,7 +344,7 @@ async function main() {
       }
     });
 
-    const url = `http://127.0.0.1:${address.port}/?wg=${options.wg}&precision=${options.precision}`;
+    const url = `http://127.0.0.1:${address.port}/?wg=${options.wg}&precision=${options.precision}&sort=${options.sort}`;
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.querySelectorAll('input[type="file"]').length === 2, {
       timeout: 15000,
@@ -420,6 +426,7 @@ async function main() {
         canvas_height: options.height,
         preprocess_workgroup_size: options.wg,
         precision: options.precision,
+        sort: options.sort,
         renderer: 'gaussian',
       },
       environment: {

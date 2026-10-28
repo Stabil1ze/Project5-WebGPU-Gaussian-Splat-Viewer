@@ -22,6 +22,10 @@ const SH_C3 = array<f32,7>(
 override workgroupSize: u32;
 override sortKeysPerDispatch: u32;
 
+// Must match the tile key layout in tile_composite.wgsl.
+const TILE_ID_SHIFT: u32 = 17u;
+const DEPTH_KEY_SHIFT: u32 = 32u - TILE_ID_SHIFT;
+
 struct DispatchIndirect {
     dispatch_x: atomic<u32>,
     dispatch_y: u32,
@@ -51,6 +55,10 @@ struct RenderSettings {
     sh_deg: f32,
     culling_enabled: f32,
     point_fraction: f32,
+    tile_cols: u32,
+    tile_rows: u32,
+    tile_size: u32,
+    tile_pair_capacity: u32,
 }
 
 struct DrawIndirect {
@@ -284,12 +292,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let sh_deg = min(u32(render_settings.sh_deg + 0.5), 3u);
     let color = clamp(computeColorFromSH(view_direction, idx, sh_deg), vec3<f32>(0.0), vec3<f32>(1.0));
 
-    let visible_index = atomicAdd(&sort_infos.keys_size, 1u);
-    atomicAdd(&draw_indirect.instance_count, 1u);
-
-    if (visible_index % sortKeysPerDispatch == 0u) {
-        atomicAdd(&sort_dispatch.dispatch_x, 1u);
-    }
+    let visible_index = atomicAdd(&draw_indirect.instance_count, 1u);
 
     // Construct the splat and store it in the output buffer
     splats[visible_index].center = ndc;
@@ -298,6 +301,67 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     splats[visible_index].radius = radius;
     splats[visible_index].extent = half_extent;
 
-    sort_depths[visible_index] = 0xFFFFFFFFu - bitcast<u32>(clip.w);
-    sort_indices[visible_index] = visible_index;
+    // Tile based sorting
+    let depth_key = bitcast<u32>(clip.w);
+    if (render_settings.tile_cols == 0u) {
+        let sorted_index = atomicAdd(&sort_infos.keys_size, 1u);
+        sort_depths[sorted_index] = 0xFFFFFFFFu - depth_key;
+        sort_indices[sorted_index] = visible_index;
+        if (sorted_index % sortKeysPerDispatch == 0u) {
+            atomicAdd(&sort_dispatch.dispatch_x, 1u);
+        }
+    } else {
+        let center_pixel = vec2<f32>(
+            (ndc.x + 1.0) * 0.5 * camera.viewport.x,
+            (1.0 - ndc.y) * 0.5 * camera.viewport.y,
+        );
+        let tile_size = f32(render_settings.tile_size);
+        let min_tile_x = u32(clamp(
+            floor((center_pixel.x - radius) / tile_size),
+            0.0,
+            f32(render_settings.tile_cols - 1u),
+        ));
+        let max_tile_x = u32(clamp(
+            floor((center_pixel.x + radius) / tile_size),
+            0.0,
+            f32(render_settings.tile_cols - 1u),
+        ));
+        let min_tile_y = u32(clamp(
+            floor((center_pixel.y - radius) / tile_size),
+            0.0,
+            f32(render_settings.tile_rows - 1u),
+        ));
+        let max_tile_y = u32(clamp(
+            floor((center_pixel.y + radius) / tile_size),
+            0.0,
+            f32(render_settings.tile_rows - 1u),
+        ));
+
+        for (var tile_y = min_tile_y; tile_y <= max_tile_y; tile_y += 1u) {
+            for (var tile_x = min_tile_x; tile_x <= max_tile_x; tile_x += 1u) {
+                var pair_index = atomicLoad(&sort_infos.keys_size);
+                loop {
+                    if (pair_index >= render_settings.tile_pair_capacity) {
+                        break;
+                    }
+                    let reservation = atomicCompareExchangeWeak(
+                        &sort_infos.keys_size,
+                        pair_index,
+                        pair_index + 1u,
+                    );
+                    if (reservation.exchanged) {
+                        let tile_id = tile_y * render_settings.tile_cols + tile_x;
+                        sort_depths[pair_index] =
+                            (tile_id << TILE_ID_SHIFT) | (depth_key >> DEPTH_KEY_SHIFT);
+                        sort_indices[pair_index] = visible_index;
+                        if (pair_index % sortKeysPerDispatch == 0u) {
+                            atomicAdd(&sort_dispatch.dispatch_x, 1u);
+                        }
+                        break;
+                    }
+                    pair_index = reservation.old_value;
+                }
+            }
+        }
+    }
 }

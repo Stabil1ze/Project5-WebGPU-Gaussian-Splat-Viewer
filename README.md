@@ -18,6 +18,8 @@ This project implements a real-time 3D Gaussian Splatting renderer in WebGPU and
 WGSL. Gaussian PLY files are loaded into GPU storage buffers, preprocessed into
 projected 2D splats, sorted back-to-front with a GPU radix sort, and rendered as
 instanced screen-space quads with spherical-harmonics color and alpha blending.
+An optional tile-sorted compute path bins overlapping Gaussians into screen tiles
+and composites each tile independently.
 
 The included Bicycle scene contains 1,063,091 Gaussians and 194 camera presets.
 
@@ -32,6 +34,7 @@ The included Bicycle scene contains 1,063,091 Gaussians and 194 camera presets.
 - Degree-3 spherical-harmonics view-dependent color.
 - Far-to-near radix sorting using a float-bit depth key.
 - Conic-based elliptical falloff and source-over alpha blending.
+- Optional tile-based depth sorting with a compute-shader compositor.
 - Interactive Gaussian scale, culling, and Gaussian sampling controls.
 
 ## Running
@@ -70,6 +73,19 @@ The optional half-precision preprocessing path can be enabled with
 `?precision=f16`. It requires the WebGPU `shader-f16` feature and falls back to
 f32 preprocessing when the feature is unavailable. The default remains f32.
 
+The tile-sorted compute path can be enabled with `?sort=tile`. Global
+back-to-front sorting remains the default at `?sort=global`.
+
+The external headless benchmark can compare both paths without adding UI to the
+renderer:
+
+```powershell
+npm run benchmark -- --ply path/to/scene.ply --cameras path/to/cameras.json --sort global
+npm run benchmark -- --ply path/to/scene.ply --cameras path/to/cameras.json --sort tile
+```
+
+Results are written as metrics-only JSON under `benchmarks/results/`.
+
 ## Rendering Pipeline
 
 1. Parse the PLY attributes on the CPU and upload packed f16 Gaussian data and
@@ -81,6 +97,16 @@ f32 preprocessing when the feature is unavailable. The default remains f32.
 5. Draw one instanced quad per visible splat through an indirect draw call.
 6. Evaluate the conic in the fragment shader and blend the exponentially decaying
    Gaussian contribution back-to-front.
+
+The optional tile path replaces steps 3-6 above:
+
+1. Compute the screen-space bounds of each visible Gaussian.
+2. Replicate it into every overlapping 16 x 16 tile and append one
+   `(tile ID, depth)` key per tile.
+3. Radix-sort all tile/Gaussian pairs by tile and then by near-to-far depth.
+4. Run one compute workgroup per tile, cache sorted splats in workgroup memory,
+   and composite the tile using front-to-back transmittance.
+5. Blit the compute output texture to the canvas.
 
 ## Performance Analysis
 
@@ -141,6 +167,41 @@ At 60% it remains visually close to full quality at about 120 FPS. At 100% it
 reaches about 66 FPS. The cost is driven by preprocess work, radix sorting, quad
 coverage, overlapping alpha blending, and fragment count rather than voxel raster
 work alone.
+
+### Tile-Based Sort vs Global Sort
+
+The tile path replaces one global splat sort with tile/Gaussian replication. On
+Bicycle camera preset `0`, one frame at 1280 x 720 contains about 1.06 million
+visible Gaussians but more than 8.5 million tile/Gaussian pairs. The radix sort
+therefore processes over eight times as many keys as the global path.
+
+The initial implementation reserved pair slots with a global
+`atomicCompareExchangeWeak` retry loop. GPU timestamp profiling showed that this
+single contended counter dominated the frame:
+
+| Stage at 640 x 360, initial CAS version | Time |
+|---|---:|
+| Tile-pair preprocessing | ~7.7 s |
+| Radix sort | ~14.8 ms |
+| Compute composite | ~7.7 ms |
+| Canvas blit | ~0.007 ms |
+
+Replacing the retry loop with `atomicAdd` reduced tile-pair preprocessing to
+about 2.0 ms. `atomicMin` clamps the published key count if the fixed pair buffer
+is exhausted, so the sorter never reads uninitialized slots.
+
+| Bicycle camera 0 | Global sort | Tile sort, CAS | Tile sort, atomicAdd |
+|---|---:|---:|---:|
+| 640 x 360 | 122.02 FPS | 0.34 FPS | 67.80 FPS |
+| 1280 x 720 | 66.51 FPS | ~0.6 FPS | 35.85 FPS |
+
+After removing the reservation stall, the remaining tile-path cost is structural:
+tile replication produces about three times as many sorting keys at 640 x 360
+and over eight times as many at 1280 x 720, while each tile compositor scans its
+local list for every pixel. The compute path is therefore correct but slower than
+the hardware-rasterized global path on this scene. The global path remains the
+default. On the larger BezierGS `waymo_017` scene at 320 x 180, tile mode reaches
+37.05 FPS and the benchmark reports no WebGPU or page errors.
 
 ## Assets
 

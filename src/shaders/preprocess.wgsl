@@ -339,27 +339,20 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
 
         for (var tile_y = min_tile_y; tile_y <= max_tile_y; tile_y += 1u) {
             for (var tile_x = min_tile_x; tile_x <= max_tile_x; tile_x += 1u) {
-                var pair_index = atomicLoad(&sort_infos.keys_size);
-                loop {
-                    if (pair_index >= render_settings.tile_pair_capacity) {
-                        break;
+                // A CAS retry loop serializes millions of reservations on this
+                // single counter. Use the native atomic append instead.
+                let pair_index = atomicAdd(&sort_infos.keys_size, 1u);
+                if (pair_index < render_settings.tile_pair_capacity) {
+                    let tile_id = tile_y * render_settings.tile_cols + tile_x;
+                    sort_depths[pair_index] =
+                        (tile_id << TILE_ID_SHIFT) | (depth_key >> DEPTH_KEY_SHIFT);
+                    sort_indices[pair_index] = visible_index;
+                    if (pair_index % sortKeysPerDispatch == 0u) {
+                        atomicAdd(&sort_dispatch.dispatch_x, 1u);
                     }
-                    let reservation = atomicCompareExchangeWeak(
-                        &sort_infos.keys_size,
-                        pair_index,
-                        pair_index + 1u,
-                    );
-                    if (reservation.exchanged) {
-                        let tile_id = tile_y * render_settings.tile_cols + tile_x;
-                        sort_depths[pair_index] =
-                            (tile_id << TILE_ID_SHIFT) | (depth_key >> DEPTH_KEY_SHIFT);
-                        sort_indices[pair_index] = visible_index;
-                        if (pair_index % sortKeysPerDispatch == 0u) {
-                            atomicAdd(&sort_dispatch.dispatch_x, 1u);
-                        }
-                        break;
-                    }
-                    pair_index = reservation.old_value;
+                } else {
+                    // Publish only the initialized prefix to the radix sorter.
+                    atomicMin(&sort_infos.keys_size, render_settings.tile_pair_capacity);
                 }
             }
         }
